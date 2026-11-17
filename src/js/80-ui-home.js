@@ -5,13 +5,13 @@ AR.views = AR.views || {};
 
 AR.views.home = async () => {
   const list = await AR.store.listProjects();
-  const openP = async (id) => { AR.state.project = await AR.store.getProject(id); AR.go('project', 'timeline'); };
+  const openP = async (id) => { AR.state.project = AR.model.migrate(await AR.store.getProject(id)); AR.go('project', 'timeline'); };
 
   const newWizard = () => {
-    const sel = new Set(['rv_nonop', 'hs_nonop']);
+    const sel = new Set(['nonop_rv', 'nonop_sq']);
     let name = '', merge = true;
     const body = h('div', null,
-      h('label', null, '測試案名稱', h('input', { placeholder: '例：XX 2U 伺服器 DVT 震動衝擊', oninput: (e) => (name = e.target.value) })),
+      h('label', null, '測試案名稱', h('input', { placeholder: '例：XX 2U EVT Config A 震動衝擊', oninput: (e) => (name = e.target.value) })),
       h('p', { class: 'muted' }, '勾選本次的測項（之後還可以增刪）：'),
       AR.DEFAULTS.testLibrary.map((t) => h('label', { class: 'check' },
         h('input', { type: 'checkbox', checked: sel.has(t.key), onchange: (e) => (e.target.checked ? sel.add(t.key) : sel.delete(t.key)) }),
@@ -61,7 +61,7 @@ AR.views.home = async () => {
       } }, '匯入／合併專案檔（.zip）')),
     h('h2', null, '測試案'),
     list.length ? h('div', { class: 'cards' }, list.map((p) => h('div', { class: 'card click', onclick: async () => openP(p.id) },
-      h('b', null, p.name), h('div', { class: 'muted' }, [p.info?.model, p.info?.stage].filter(Boolean).join('｜')),
+      h('b', null, p.name), h('div', { class: 'muted' }, [p.info?.projectName || p.info?.product, p.info?.phase || p.info?.stage, p.info?.sku].filter(Boolean).join('｜')),
       h('div', { class: 'muted small' }, '最後修改 ' + AR.fmtTime(p.updatedAt)),
       h('button', { class: 'btn ghost small danger', onclick: async (e) => {
         e.stopPropagation();

@@ -1,16 +1,17 @@
-/* 82-ui-timeline.js — 分項時間軸、拍照節點、現場拍照歸位 */
+/* 82-ui-timeline.js — 分項時間軸、拍照節點、現場拍照歸位、各分項架設照 */
 'use strict';
 
 AR.TEST_COLORS = ['#2563eb', '#d97706', '#059669', '#7c3aed', '#db2777', '#0891b2'];
 
-AR.addPhotos = async (p, nodeId, itemId, files) => {
+/** 存入照片。extra：額外欄位（例如架設照的 subitemId） */
+AR.addPhotos = async (p, nodeId, itemId, files, extra = {}) => {
   const busy = files.length > 2 ? AR.busy(`存入 ${files.length} 張照片…`) : null;
   try {
     for (const f of files) {
       const blobId = await AR.store.putBlob(f);
       let w = 0, hh = 0;
       try { ({ w, h: hh } = await AR.img.sizeOfBlob(f)); } catch (e) { /* 無法解碼的格式（例如部分 HEIC） */ }
-      p.photos.push({ id: AR.uid('ph_'), nodeId, itemId, blobId, w, h: hh, takenAt: AR.now(), by: AR.state.user || '', note: '' });
+      p.photos.push({ id: AR.uid('ph_'), nodeId, itemId, blobId, w, h: hh, takenAt: AR.now(), by: AR.state.user || '', note: '', ...extra });
     }
   } finally { busy && busy.close(); }
   AR.save();
@@ -20,16 +21,19 @@ AR.addPhotos = async (p, nodeId, itemId, files) => {
 AR.photoViewer = async (p, ph, onChange) => {
   const M = AR.model;
   const url = await AR.blobUrl(ph.blobId);
-  const itemOpts = M.items(p, ['angle', 'part', 'unsorted']).map((c) => ({ value: c.id, label: c.name }));
-  const nodeOpts = M.sortedNodes(p).map((n) => ({ value: n.id, label: M.nodeLabel(p, n) }));
+  const isSetup = ph.itemId === 'setup';
   const done = () => { AR.save(); m.close(); onChange && onChange(); };
-  const m = AR.modal(`${M.itemName(p, ph.itemId)}｜${M.nodeLabel(p, ph.nodeId)}`, h('div', null,
+  const where = isSetup
+    ? h('label', null, '所屬分項（報告 6.1 Testing Setup）', AR.select(p.timeline.map((sid) => ({ value: sid, label: M.subLabel(p, sid) })), ph.subitemId, (v) => { ph.subitemId = v; done(); }))
+    : h('div', { class: 'grid2' },
+      h('label', null, '歸到清單項目', AR.select(M.items(p, ['angle', 'part', 'unsorted']).map((c) => ({ value: c.id, label: c.name })), ph.itemId, (v) => { ph.itemId = v; done(); })),
+      h('label', null, '歸到拍照節點', AR.select(M.sortedNodes(p).map((n) => ({ value: n.id, label: M.nodeLabel(p, n) })), ph.nodeId, (v) => { ph.nodeId = v; done(); })));
+  const title = isSetup ? `架設照｜${M.subLabel(p, ph.subitemId)}` : `${M.itemName(p, ph.itemId)}｜${M.nodeLabel(p, ph.nodeId)}`;
+  const m = AR.modal(title, h('div', null,
     h('img', { class: 'big', src: url }),
     ph.w ? null : h('p', { class: 'warn-text' }, '這張照片格式無法在瀏覽器顯示（可能是 HEIC），建議手機相機改用「最相容」格式。'),
-    h('div', { class: 'grid2' },
-      h('label', null, '歸到清單項目', AR.select(itemOpts, ph.itemId, (v) => { ph.itemId = v; done(); })),
-      h('label', null, '歸到拍照節點', AR.select(nodeOpts, ph.nodeId, (v) => { ph.nodeId = v; done(); }))),
-    h('label', null, '備註', h('input', { value: ph.note || '', oninput: (e) => { ph.note = e.target.value; AR.save(); } })),
+    where,
+    h('label', null, '備註（報告中會當成照片說明，例如 L／M／R）', h('input', { value: ph.note || '', oninput: (e) => { ph.note = e.target.value; AR.save(); } })),
     h('div', { class: 'muted small' }, `拍攝/加入時間：${AR.fmtTime(ph.takenAt)}　${ph.w}×${ph.h}`),
     h('div', { class: 'row end' }, h('button', { class: 'btn danger', onclick: async () => {
       if (!await AR.confirm('刪除這張照片？')) return;
@@ -44,6 +48,26 @@ AR.photoViewer = async (p, ph, onChange) => {
 AR.thumb = async (p, ph, onChange) => {
   const url = await AR.blobUrl(ph.blobId);
   return h('img', { class: 'thumb', src: url, loading: 'lazy', title: ph.note || '', onclick: async () => AR.photoViewer(p, ph, onChange) });
+};
+
+/** 某個分項的架設照（UUT 固定在震動台／衝擊台上的照片，報告 6.1） */
+AR.setupPhotoModal = (p, subId) => {
+  const M = AR.model;
+  const box = h('div');
+  const m = AR.modal(`架設照｜${M.subLabel(p, subId)}`, box, { wide: true });
+  const draw = async () => {
+    const list = M.setupPhotos(p, subId);
+    box.replaceChildren(
+      h('p', { class: 'muted small' }, '每個分項（每一面／每一軸）拍一張 UUT 與控制加速規的架設照，報告 6.1 Testing Setup 會自動帶入。可以多張。'),
+      h('div', { class: 'thumbs' }, list.length ? await Promise.all(list.map((ph) => AR.thumb(p, ph, () => { draw(); AR.render(); })))
+        : h('span', { class: 'muted small' }, '還沒有架設照。')),
+      h('div', { class: 'row' },
+        h('button', { class: 'btn primary', onclick: async () => { const fs = await AR.pickFiles({ capture: 'environment' }); if (fs.length) { await AR.addPhotos(p, null, 'setup', fs, { subitemId: subId }); draw(); AR.render(); } } }, '📷 拍照'),
+        h('button', { class: 'btn', onclick: async () => { const fs = await AR.pickFiles({ multiple: true }); if (fs.length) { await AR.addPhotos(p, null, 'setup', fs, { subitemId: subId }); draw(); AR.render(); } } }, '🖼 選照片'),
+        h('span', { class: 'grow' }),
+        h('button', { class: 'btn ghost', onclick: () => m.close() }, '完成')));
+  };
+  draw();
 };
 
 AR.views.timeline = async (p) => {
@@ -76,11 +100,13 @@ AR.views.timeline = async (p) => {
     const s = M.subitem(p, sid);
     if (!s) return;
     const v = p.verdicts[sid];
+    const nSetup = M.setupPhotos(p, sid).length;
     rows.push(h('div', { class: 'step' },
       h('span', { class: 'dot', style: { background: color(s.test) } }),
       h('span', { class: 'grow' }, h('span', { class: 'muted small' }, `${i + 1}. ${s.test.name}　`), h('b', null, s.name),
-        v === 'fail' ? h('span', { class: 'tag bad' }, '有問題') : v === 'pass' ? h('span', { class: 'tag ok' }, '無問題') : null,
+        v === 'fail' ? h('span', { class: 'tag bad' }, 'Fail') : v === 'defect' ? h('span', { class: 'tag warn' }, 'Defect') : v === 'pass' ? h('span', { class: 'tag ok' }, 'Pass') : null,
         M.issuesOf(p, sid).length ? h('span', { class: 'tag bad' }, `問題 ${M.issuesOf(p, sid).length}`) : null),
+      h('button', { class: 'btn small' + (nSetup ? '' : ' ghost'), title: '這個分項的架設照（報告 6.1）', onclick: async () => AR.setupPhotoModal(p, sid) }, nSetup ? `🔧 架設照 ${nSetup}` : '🔧 架設照'),
       h('button', { class: 'btn ghost small', title: '往前', onclick: async () => move(i, -1) }, '↑'),
       h('button', { class: 'btn ghost small', title: '往後', onclick: async () => move(i, 1) }, '↓')));
     const ns = M.sortedNodes(p).filter((n) => n.after === sid);
@@ -94,7 +120,7 @@ AR.views.timeline = async (p) => {
   return h('div', { class: 'page' },
     h('section', { class: 'panel' },
       h('h2', null, '分項時間軸'),
-      h('p', { class: 'muted' }, '依實際執行順序排列（可用 ↑↓ 調整）。在任何分項後面都可以拍一組照片；前一組的測試後照片就是下一個分項的測試前照片。每一組都會完整留存，供之後回頭找問題是哪個階段產生的。'),
+      h('p', { class: 'muted' }, '依實際執行順序排列（可用 ↑↓ 調整）。在任何分項後面都可以拍一組照片；前一組的測試後照片就是下一個分項的測試前照片。每一組都會完整留存，供之後回頭找問題是哪個階段產生的。每個分項另有「架設照」，放進報告 6.1。'),
       p.timeline.length ? null : h('p', { class: 'warn-text' }, '還沒有測項，請到「基本資料與測項」加入。'),
       h('div', { class: 'legend' }, p.tests.map((t) => h('span', null, h('span', { class: 'dot', style: { background: color(t) } }), t.name))),
       h('div', { class: 'timeline' }, rows)));
@@ -111,7 +137,7 @@ AR.views.node = async (p, nodeId) => {
   const items = M.enabledItems(p, ['angle', 'part']);
   const unsorted = M.photosOf(p, nodeId, 'unsorted');
   const done = items.filter((c) => M.photosOf(p, nodeId, c.id).length).length;
-  const [onlyMissing] = [AR.state.sub.onlyMissing];
+  const onlyMissing = AR.state.sub.onlyMissing;
 
   const itemRow = async (c) => {
     const photos = M.photosOf(p, nodeId, c.id);

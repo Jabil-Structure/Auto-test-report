@@ -14,12 +14,19 @@ AR.pkg = (() => {
     for (const ph of p.photos) {
       const blob = await AR.store.getBlob(ph.blobId);
       if (!blob) continue;
-      const ni = nodes.findIndex((n) => n.id === ph.nodeId) + 1;
-      const n = nodes[ni - 1];
-      const dir = `照片/${String(ni).padStart(2, '0')}_${AR.safeName(n ? (n.after ? M.subLabel(p, n.after) + '之後' : '測試前') : '未知節點')}`;
-      const same = M.photosOf(p, ph.nodeId, ph.itemId);
-      const k = same.indexOf(ph) + 1;
-      const path = `${dir}/${AR.safeName(M.itemName(p, ph.itemId))}_${k}.${extOf(blob)}`;
+      let path;
+      if (ph.itemId === 'setup') {
+        // 架設照：照片/架設照/{測項}_{分項}_{流水號}
+        const k = M.setupPhotos(p, ph.subitemId).indexOf(ph) + 1;
+        path = `照片/架設照/${AR.safeName(M.subLabel(p, ph.subitemId))}_${k}.${extOf(blob)}`;
+      } else {
+        const ni = nodes.findIndex((n) => n.id === ph.nodeId) + 1;
+        const n = nodes[ni - 1];
+        const dir = `照片/${String(ni).padStart(2, '0')}_${AR.safeName(n ? (n.after ? M.subLabel(p, n.after) + '之後' : '測試前') : '未知節點')}`;
+        const same = M.photosOf(p, ph.nodeId, ph.itemId);
+        const k = same.indexOf(ph) + 1;
+        path = `${dir}/${AR.safeName(M.itemName(p, ph.itemId))}_${k}.${extOf(blob)}`;
+      }
       zip.file(path, blob);
       files[ph.blobId] = path;
     }
@@ -46,8 +53,8 @@ AR.pkg = (() => {
       const type = ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif' : 'image/jpeg';
       if (!(await AR.store.getBlob(blobId))) await AR.store.putBlob(new Blob([await f.async('arraybuffer')], { type }), blobId);
     }
-    const incoming = meta.project;
-    const local = await AR.store.getProject(incoming.id);
+    const incoming = M.migrate(meta.project);
+    const local = M.migrate(await AR.store.getProject(incoming.id));
     if (local) {
       const added = M.merge(local, incoming);
       local.updatedAt = AR.now();

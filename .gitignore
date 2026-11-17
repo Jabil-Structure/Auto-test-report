@@ -2,3 +2,7 @@ node_modules/
 *.xlsx
 *.zip
 /*.png
+
+# 內部文件（需求、規劃、報告格式分析）：只留在本機，不放公開程式庫
+.kiro/
+docs/

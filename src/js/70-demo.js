@@ -103,27 +103,51 @@ AR.demo = (() => {
     return new Promise((res) => c.toBlob(res, 'image/png'));
   }
 
-  async function addPhoto(p, nodeId, itemId, blob) {
+  /** 架設照：伺服器固定在震動台／衝擊台上（依面／軸畫不同方向） */
+  function drawSetup(label, upright) {
+    const c = document.createElement('canvas'); c.width = 1600; c.height = 1200;
+    const g = c.getContext('2d');
+    g.fillStyle = '#b8bfc7'; g.fillRect(0, 0, 1600, 1200);
+    g.fillStyle = '#8a9198'; g.fillRect(150, 850, 1300, 200);                      // 台面
+    for (let i = 0; i < 12; i++) { g.fillStyle = '#6b7178'; g.beginPath(); g.arc(220 + i * 105, 950, 14, 0, Math.PI * 2); g.fill(); }
+    g.fillStyle = '#7a4a2a'; g.fillRect(250, 780, 1100, 70);                         // 治具
+    const [w, hh] = upright ? [380, 640] : [1000, 260];
+    g.fillStyle = '#4b5563'; g.fillRect(800 - w / 2, 780 - hh, w, hh);               // 伺服器
+    g.strokeStyle = '#111'; g.lineWidth = 4; g.strokeRect(800 - w / 2, 780 - hh, w, hh);
+    g.font = 'bold 54px sans-serif'; g.fillStyle = '#fff'; g.textAlign = 'center'; g.fillText(label, 800, 780 - hh / 2 + 18);
+    g.font = 'bold 40px sans-serif'; g.fillStyle = 'rgba(255,255,255,.5)'; g.fillText('UUT SETUP（DEMO 假資料）', 800, 120);
+    return new Promise((res) => c.toBlob(res, 'image/jpeg', 0.85));
+  }
+
+  async function addPhoto(p, nodeId, itemId, blob, extra = {}) {
     const blobId = await AR.store.putBlob(blob);
     const { w, h } = await AR.img.sizeOfBlob(blob);
-    p.photos.push({ id: AR.uid('ph_'), nodeId, itemId, blobId, w, h, takenAt: AR.now(), by: '示範' });
+    p.photos.push({ id: AR.uid('ph_'), nodeId, itemId, blobId, w, h, takenAt: AR.now(), by: '示範', note: '', ...extra });
+  }
+  async function addResponse(p, blob, name, extra) {
+    const blobId = await AR.store.putBlob(blob);
+    const { w, h } = await AR.img.sizeOfBlob(blob);
+    p.responses.push({ id: AR.uid('rs_'), blobId, w, h, name, source: 'DEMO_response.docx', testId: '', subitemId: '', accelId: '', caption: '', include: true, ...extra });
   }
 
   async function create(onProgress = () => {}) {
     const M = AR.model;
     const p = M.newProject('示範：DEMO 伺服器 震動衝擊');
-    p.info = { reportNo: 'DEMO-2026-001', product: 'DEMO 2U 伺服器', model: 'DM-2U-01', sampleNo: 'SN0001', stage: 'DVT',
-      customer: '（示範客戶）', lab: '（第三方實驗室）', startDate: '2026-11-10', endDate: '2026-11-12', engineer: '（示範）' };
-    const g1 = p.groups[0]; g1.name = '震動＋衝擊（非運轉，交錯進行）';
-    const g2 = { id: AR.uid('g_'), name: '正弦掃頻震動' }; p.groups.push(g2);
-    const rv = M.addTest(p, 'rv_nonop', g1.id), hs = M.addTest(p, 'hs_nonop', g1.id), sn = M.addTest(p, 'sine', g2.id);
+    Object.assign(p.info, {
+      projectName: 'DEMO 2U', codeName: 'DM-2U-01', phase: 'DVT', sku: 'Config A (DEMO)', engineer: '（示範）', technician: 'DEMO',
+      approval: 'DEMO', testDate: '2026/11/10~11/12', reportDate: '2026-11-12', revision: 'A01', lab: 'Third-party lab (DEMO)', labAddress: '',
+    });
+    const g1 = p.groups[0]; g1.name = 'NONOP Vib + Shock（交錯進行）';
+    const g2 = { id: AR.uid('g_'), name: 'NONOP Sine-sweep Vibration' }; p.groups.push(g2);
+    const rv = M.addTest(p, 'nonop_rv', g1.id), sq = M.addTest(p, 'nonop_sq', g1.id), sn = M.addTest(p, 'nonop_sine', g2.id);
     M.regroupByAxis(p);
-    const sub = (t, name) => t.subitems.find((s) => s.name.startsWith(name)).id;
+    const sub = (t, dir) => t.subitems.find((s) => s.dir === dir).id;
     const n0 = p.nodes[0];
     const mk = (after) => { const n = { id: AR.uid('n_'), after, createdAt: AR.now() }; p.nodes.push(n); return n; };
-    const nX = mk(sub(hs, '-X')), nY = mk(sub(hs, '-Y')), nZ = mk(sub(hs, '-Z')), nS = mk(sub(sn, 'Z'));
+    const nX = mk(sub(sq, '-X')), nY = mk(sub(sq, '-Y')), nZ = mk(sub(sq, '-Z')), nS = mk(sub(sn, 'Z'));
     const angles = AR.DEFAULTS.angles.map((a) => a.id);
     const partId = (name) => p.checklist.find((c) => c.name.startsWith(name)).id;
+    const FAN = 'Fan module', MARK = 'Screw anti-loosening';
     const plan = [
       { n: n0, angles, loose: false, parts: true },
       { n: nX, angles: ['ang_open_top'], loose: true, parts: false },
@@ -138,40 +162,42 @@ AR.demo = (() => {
         await addPhoto(p, step.n.id, a, await drawAngle(a, { dx: Math.round(Math.random() * 40 - 20), dy: Math.round(Math.random() * 40 - 20), loose: step.loose && a === 'ang_open_top' }));
       }
       if (step.parts) {
-        await addPhoto(p, step.n.id, partId('風扇模組'), await drawPart('風扇模組', 1));
-        await addPhoto(p, step.n.id, partId('風扇模組'), await drawPart('風扇模組', 2));
-        await addPhoto(p, step.n.id, partId('防鬆標記'), await drawPart('防鬆標記', 1, step.loose));
+        await addPhoto(p, step.n.id, partId(FAN), await drawPart('Fan module', 1), { note: 'L' });
+        await addPhoto(p, step.n.id, partId(FAN), await drawPart('Fan module', 2), { note: 'R' });
+        await addPhoto(p, step.n.id, partId(MARK), await drawPart('防鬆標記 Screw mark', 1, step.loose));
       }
+    }
+    onProgress('產生示範架設照');
+    for (const t of [rv, sq, sn]) {
+      for (const s of t.subitems) await addPhoto(p, null, 'setup', await drawSetup(s.setup || s.en, s.axis !== 'Z'), { subitemId: s.id });
     }
     // 母圖裁切框（在測試前節點畫好，其他節點自動套用）
-    const R = (angleId, name, x, y, w, h, accel = false) => p.regions.push({ id: AR.uid('r_'), angleId, name, rect: { x, y, w, h }, accel, baseNodeId: n0.id });
-    R('ang_open_top', 'CPU 散熱器', 0.28, 0.33, 0.22, 0.30);
-    R('ang_open_top', '記憶體（DIMM）', 0.50, 0.28, 0.16, 0.42);
-    R('ang_open_top', '電源供應器（PSU）', 0.68, 0.57, 0.22, 0.31);
-    R('ang_open_top', '風扇支架螺絲（防鬆標記）', 0.73, 0.27, 0.12, 0.14);
-    R('ang_open_top', '加速規（開蓋上）', 0.78, 0.13, 0.09, 0.10, true);
-    R('ang_closed_front', '加速規（前）', 0.10, 0.18, 0.09, 0.10, true);
+    const R = (angleId, name, x, y, w, h, accel = false) => { const r = { id: AR.uid('r_'), angleId, name, rect: { x, y, w, h }, accel, baseNodeId: n0.id }; p.regions.push(r); return r; };
+    R('ang_open_top', 'CPU heatsink', 0.28, 0.33, 0.22, 0.30);
+    R('ang_open_top', 'DIMM', 0.50, 0.28, 0.16, 0.42);
+    R('ang_open_top', 'PSU', 0.68, 0.57, 0.22, 0.31);
+    const regScrew = R('ang_open_top', 'Fan bracket screw (anti-loosening mark)', 0.73, 0.27, 0.12, 0.14);
+    const acc1 = R('ang_open_top', 'ACC-1 (fan bracket)', 0.78, 0.13, 0.09, 0.10, true);
+    R('ang_closed_front', 'ACC-2 (front panel)', 0.10, 0.18, 0.09, 0.10, true);
 
-    // 問題：-X 衝擊後發現風扇支架螺絲防鬆標記錯位，之後沒有惡化
-    const regScrew = p.regions.find((r) => r.name.startsWith('風扇支架'));
+    // 問題：-X（Rear）衝擊後發現風扇支架螺絲防鬆標記錯位，之後沒有惡化
     const phBefore = M.primaryPhoto(p, n0.id, 'ang_open_top'), phAfter = M.primaryPhoto(p, nX.id, 'ang_open_top');
-    p.issues.push({ id: AR.uid('i_'), no: 1, subitemId: sub(hs, '-X'), part: '風扇支架螺絲', title: '防鬆標記錯位（螺絲疑似鬆動）', severity: '中',
-      desc: '-X（左）衝擊後目視發現風扇支架螺絲的防鬆標記錯位約 30 度，之後各軸測試無進一步惡化。\n（示範文字）', foundNodeId: nX.id,
+    p.issues.push({ ...AR.newIssue({ subitemId: sub(sq, '-X'), foundNodeId: nX.id }), no: 1,
+      part: 'Fan bracket screw', title: 'Anti-loosening mark of fan bracket screw shifted', severity: 'N/A', status: 'Record', defectNo: 'N/A',
+      checkItem: 'All screws in proper torque',
+      desc: 'After the -X (Rear) shock, the anti-loosening mark shifted about 30 degrees. No further change in the following tests. (DEMO text)',
       refs: [{ photoId: phBefore.id, regionId: regScrew.id }, { photoId: phAfter.id, regionId: regScrew.id }] });
     for (const s of M.allSubitems(p)) p.verdicts[s.id] = 'pass';
-    p.verdicts[sub(hs, '-X')] = 'fail';
+    p.verdicts[sub(sq, '-X')] = 'defect';
 
-    // 響應圖
+    // 響應圖：每個分項一張輸入波形（6.1），加速規一張響應（7.1）
     onProgress('產生示範響應圖');
     let seed = 1;
-    for (const t of [rv, hs, sn]) {
-      for (const s of t.subitems.filter((_, i) => t.kind === 'vib' || i % 2 === 0).slice(0, 3)) {
-        const blob = await drawResponse(`${t.name} ${s.name}`, t.kind, seed++);
-        const blobId = await AR.store.putBlob(blob);
-        const { w, h } = await AR.img.sizeOfBlob(blob);
-        p.responses.push({ id: AR.uid('rs_'), blobId, w, h, name: `image${seed}.png`, source: '示範響應.docx', testId: t.id, subitemId: s.id, caption: '', include: true });
-      }
+    for (const t of [rv, sq, sn]) {
+      for (const s of t.subitems) await addResponse(p, await drawResponse(`${t.name} ${s.short}`, t.kind, seed++), `image${seed}.png`, { testId: t.id, subitemId: s.id });
     }
+    await addResponse(p, await drawResponse('ACC-1 response', 'shock', 99), 'acc1.png', { testId: sq.id, accelId: acc1.id });
+    p.config.torque = 'MB, HDD BP | 6\nTop cover | 6\nScrew of HSK | 9.2';
     await AR.store.putProject(p);
     return p;
   }
